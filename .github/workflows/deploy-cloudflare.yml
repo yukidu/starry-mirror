@@ -47,6 +47,9 @@ jobs:
           node --check worker/ai-models.mjs
           node --check tests/ai-models.test.mjs
           node --test tests/ai-models.test.mjs
+          grep -q 'rejectIfBusy: true' worker/ai-models.mjs
+          grep -q '最長約 45 秒' mirror-app.js
+          grep -q 'AbortController' mirror-app.js
           grep -q "@cf/qwen/qwen3.8-27b" worker/ai-models.mjs
           grep -q "@cf/openai/gpt-oss-120b" worker/ai-models.mjs
           grep -q "@cf/zai-org/glm-4.7-flash" worker/ai-models.mjs

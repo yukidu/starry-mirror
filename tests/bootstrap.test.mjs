@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import mirror from '../worker/v2.js';
+
+const cards = [
+  { id:'Q000001',quoteText:'經驗是最好的老師',category:'信心勇氣',position:1,active:1 },
+  { id:'Q000002',quoteText:'今天開始改變',category:'成長',position:2,active:1 }
+];
+
+function testDb() {
+  const statements = [];
+  return {
+    statements,
+    prepare(sql) {
+      statements.push(sql);
+      const stmt = {
+        bind() { return stmt; },
+        async first() {
+          if (sql.includes('COUNT(*) AS count FROM mirror_cards')) return { count:2 };
+          if (sql.includes("key='stableSyncV2At'")) return {value:String(Date.now())};
+          return null;
+        },
+        async all() {
+          if (sql.includes('FROM mirror_cards ORDER BY position')) return { results:cards };
+          return { results:[] };
+        },
+        async run(){ return { success:true }; }
+      };
+      return stmt;
+    },
+    async batch(queries){ return queries.map(()=>({ success:true })); }
+  };
+}
+
+test('guest sees stored cards even when legacy lastSheetSync timestamp is missing',async()=>{
+  const db=testDb();
+  const request=new Request('https://mirror.starry.phd/api/mirror/bootstrap',{
+    headers:{'X-Mirror-Device':'stable-guest-device-id-00000001'}
+  });
+  const response=await mirror.fetch(request,{MIRROR_DB:db},{});
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.equal(data.cards.length,2);
+  assert.equal(data.usage.draws.used,0);
+  assert.equal(data.authenticated,false);
+  assert.ok(!db.statements.some(sql=>sql.includes("key='lastSheetSync'")),'legacy sync must never gate cards');
+});
+
+test('signed-in member sees cards and profile with no Starry ID credentials exposed',async()=>{
+  const db=testDb();
+  const request=new Request('https://mirror.starry.phd/api/mirror/bootstrap',{headers:{
+    'X-Mirror-Device':'stable-guest-device-id-00000001',
+    Authorization:'Bearer '+'a'.repeat(40)
+  }});
+  const response=await mirror.fetch(request,{
+    MIRROR_DB:db,
+    STARRY_ECOSYSTEM:{fetch:async()=>new Response(JSON.stringify({
+      authenticated:true,identity:{userId:'test-user',name:'會員測試',approvedRank:'白金',balanceUnits:20}
+    }),{headers:{'content-type':'application/json'}})}
+  },{});
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.equal(data.cards.length,2);
+  assert.equal(data.authenticated,true);
+  assert.equal(data.identity.name,'會員測試');
+  assert.equal(data.identity.rank,'白金');
+  assert.equal(data.battery,2);
+  assert.equal(data.usage.tier,'platinum');
+  assert.equal(JSON.stringify(data).includes('aaaaaaaa'),false);
+});

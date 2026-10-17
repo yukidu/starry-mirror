@@ -121,9 +121,50 @@
     el.querySelector('.mirror-close').onclick=()=>closeLayer(el); el.querySelectorAll('[data-direction]').forEach(btn=>btn.onclick=()=>runAi(card,btn.dataset.direction,el,parent));
   }
   async function runAi(card,direction,chooser,parent) {
-    chooser.querySelector('.mirror-dialog').innerHTML = `<div class="mirror-spinner"></div><div style="text-align:center;font-weight:900">正在照見你的個人化線索…</div>`;
-    try { const result = await api('/ai-readings',{method:'POST',body:JSON.stringify({cardId:card.id,direction})}); closeLayer(chooser); if (result.battery !== undefined) setUsage(result.usage,result.battery); deltaPop(result.batteryDelta); showReading(result.reading); }
-    catch(error){ closeLayer(chooser); if(error.status===429){if(error.data?.usage)setUsage(error.data.usage);toast('今天的 AI 解籤次數已用完');}else if(error.status===402)toast('電池不足，無法使用 AI 解籤');else toast('AI 解籤暫時忙碌，請稍後再試'); }
+    const controller = new AbortController();
+    let timedOut = false, canceled = false;
+    const dialog = chooser.querySelector('.mirror-dialog');
+    dialog.innerHTML = '<button type="button" class="mirror-close" aria-label="取消等待">✕</button><div class="mirror-spinner"></div><div class="mirror-ai-wait-text" style="text-align:center;font-weight:900">正在照見你的個人化線索…</div><div style="text-align:center;font-size:13px;opacity:.75">如果模型忙碌，會自動嘗試其他免費 AI，最長約 45 秒</div>';
+    dialog.querySelector('.mirror-close').onclick = () => {
+      canceled = true;
+      controller.abort();
+      closeLayer(chooser);
+    };
+    const waitText = dialog.querySelector('.mirror-ai-wait-text');
+    const noticeTimer = setTimeout(() => {
+      if (!controller.signal.aborted) waitText.textContent = '正在嘗試 AI 模型，請稍候…';
+    }, 12_000);
+    const timeoutTimer = setTimeout(() => { timedOut = true; controller.abort(); }, 46_000);
+    try {
+      const result = await api('/ai-readings', {
+        method:'POST',
+        body:JSON.stringify({cardId:card.id,direction}),
+        signal:controller.signal
+      });
+      if (canceled || timedOut) return;
+      closeLayer(chooser);
+      if (result.battery !== undefined) setUsage(result.usage,result.battery);
+      deltaPop(result.batteryDelta);
+      showReading(result.reading);
+    } catch(error) {
+      if (canceled) return;
+      closeLayer(chooser);
+      if (timedOut || error.name === 'AbortError') {
+        toast('AI 等候逾時，請稍後重試，也可到解籤紀錄查看結果');
+      } else if (error.status === 429 && error.data?.error === 'ai_free_quota_exhausted') {
+        toast('Cloudflare 今日免費 AI 額度已用完，請明天再試');
+      } else if (error.status === 429) {
+        if (error.data?.usage) setUsage(error.data.usage);
+        toast('今天的 AI 解籤次數已用完');
+      } else if (error.status === 402) {
+        toast('電池不足，無法使用 AI 解籤');
+      } else {
+        toast('AI 解籤暫時忙碌，請稍後再試');
+      }
+    } finally {
+      clearTimeout(noticeTimer);
+      clearTimeout(timeoutTimer);
+    }
   }
   function showReading(reading) {
     const el=layer(`<button class="mirror-close">✕</button><h2 style="font-size:22px;font-weight:950">🔮 ${escapeHtml(reading.direction)}解籤</h2><div class="mirror-meta">當前金句：${escapeHtml(reading.quoteText)}</div><div class="mirror-reading">${escapeHtml(reading.resultText)}</div><div class="mirror-list-actions"><button class="share-reading">📤 分享解籤圖片</button><button class="history">查看全部紀錄</button></div>`);

@@ -23,7 +23,8 @@ service = "echostars"
 
 [vars]
 MIRROR_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1HufZqMwvvZh735nBMvKnDDI-BnZMUuYmFTA0_3B2lCE/export?format=csv"
-MIRROR_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
+# 免費解籤模型依序列於 worker/ai-models.mjs：Qwen 3.8 27B → GPT-OSS 120B → GLM 4.7 Flash。
+# 不啟用第三方付費 API；Workers Free 每日額度用完即停止，不會自動改用付費模型。
 
 # MIRROR_DB 由 GitHub Actions 自動尋找或建立 starry_mirror_db 後，
 # 在部署工作區加入正式 database_id，避免把不存在的 ID 寫死。

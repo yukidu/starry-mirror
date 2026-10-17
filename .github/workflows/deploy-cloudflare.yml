@@ -42,6 +42,13 @@ jobs:
           node --check worker/index.js
           node --check worker/main.js
           node --check worker/v2.js
+          node --check worker/ai-models.mjs
+          node --check tests/ai-models.test.mjs
+          node --test tests/ai-models.test.mjs
+          grep -q "@cf/qwen/qwen3.8-27b" worker/ai-models.mjs
+          grep -q "@cf/openai/gpt-oss-120b" worker/ai-models.mjs
+          grep -q "@cf/zai-org/glm-4.7-flash" worker/ai-models.mjs
+          ! grep -q 'MIRROR_AI_MODEL' wrangler.toml
           node --check scripts/build-static.mjs
           node --check scripts/optimize-runtime.mjs
           node --check scripts/apply-mirror-runtime.mjs

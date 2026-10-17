@@ -68,3 +68,36 @@ test('structured content response works and does not consume reasoning', () => {
     choices: [{ message: { reasoning_content: 'hidden', content: [{ type: 'text', text: '正式答案' }] } }],
   }), '正式答案');
 });
+
+test('busy model is rejected immediately and next one receives the same prompt', async () => {
+  const models = [];
+  const messages = [{ role: 'user', content: '免費解籤測試' }];
+  const result = await runMirrorAi({ run: async (model, params, opts) => {
+    models.push({ model, params, opts });
+    if (models.length === 1) throw new Error('model is busy');
+    return { response: '已成功切換 GPT-OSS' };
+  } }, messages);
+  assert.equal(result.model, AI_MODELS[1]);
+  assert.deepEqual(models.map(row => row.model), AI_MODELS.slice(0, 2));
+  assert.equal(models[0].params.reasoning_effort, 'low');
+  assert.equal(models[0].params.messages, messages);
+  assert.equal(models[0].opts.rejectIfBusy, true);
+});
+
+test('an inference that never responds cannot block all other free backup models', async () => {
+  const seen = [];
+  const started = Date.now();
+  const result = await runMirrorAi({ run: async model => {
+    seen.push(model);
+    if (model === AI_MODELS[0]) return new Promise(() => {});
+    return { response: '後備模型回覆成功' };
+  } }, [], { timeouts: [20, 20, 20] });
+  assert.equal(result.model, AI_MODELS[1]);
+  assert.deepEqual(seen, AI_MODELS.slice(0, 2));
+  assert.ok(Date.now() - started < 1000, 'fallback should finish quickly');
+});
+
+test('all three unresponsive inferences fail within the combined wait budget', async () => {
+  const result = await runMirrorAi({ run: () => new Promise(() => {}) }, [], { timeouts: [5, 5, 5] });
+  assert.equal(result.error, 'ai_temporarily_unavailable');
+});

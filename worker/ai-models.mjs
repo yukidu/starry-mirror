@@ -35,21 +35,44 @@ function freeQuotaExhausted(error) {
   return /(?:daily|free|account)[ -]?(?:allocation|quota|neurons|limit)|neurons.{0,45}(?:exceed|limit)|quota[ -]?exhaust|billing[ -]?limit|workers paid plan/.test(message);
 }
 
-export async function runMirrorAi(ai, messages) {
+// Keep synchronous mobile requests bounded. When Cloudflare is busy, reject rather
+// than queue and switch to the next free Workers AI model.
+export const MODEL_TIMEOUTS_MS = Object.freeze([18_000, 12_000, 10_000]);
+export const MAX_AI_GENERATION_TOKENS = 1100;
+const timedOut = Symbol('mirror_ai_timeout');
+
+export async function runMirrorAi(ai, messages, options = {}) {
   if (!ai?.run) return { error: 'ai_binding_unavailable' };
-  for (const model of AI_MODELS) {
+  const timeouts = options.timeouts || MODEL_TIMEOUTS_MS;
+  for (const [index, model] of AI_MODELS.entries()) {
+    const startedAt = Date.now();
+    let timer;
     try {
-      const response = await ai.run(model, {
+      const request = {
         messages,
-        max_tokens: 1600,
+        max_tokens: MAX_AI_GENERATION_TOKENS,
         temperature: 0.55,
-      });
-      const resultText = extractAiText(response);
+        // Qwen defaults to high reasoning; low is enough for a reflective
+        // reading and leaves more completion budget for actual Chinese text.
+        ...(index === 0 ? { reasoning_effort: 'low' } : {}),
+      };
+      const result = await Promise.race([
+        Promise.resolve().then(() => ai.run(model, request, { rejectIfBusy: true })),
+        new Promise(resolve => { timer = setTimeout(() => resolve(timedOut), timeouts[index] || 10_000); }),
+      ]);
+      if (result === timedOut) {
+        console.warn('Mirror AI per-model timeout', model, Date.now() - startedAt);
+        continue;
+      }
+      const resultText = extractAiText(result);
       if (resultText) return { model, resultText };
       console.warn('Mirror AI returned an empty response', model);
     } catch (error) {
+      // Log only the model and code, never users' private context or prompt.
       console.warn('Mirror AI model unavailable', model, Number(error?.status || 0));
       if (freeQuotaExhausted(error)) return { error: 'ai_free_quota_exhausted' };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   return { error: 'ai_temporarily_unavailable' };

@@ -1,4 +1,5 @@
 import legacy from './main.js';
+import { mergeVisitor } from './index.js';
 import { runMirrorAi } from './ai-models.mjs';
 
 const SCALE = 10;
@@ -109,7 +110,37 @@ async function stableSync(env){
 }
 async function prepareCards(env,ctx){const db=env.MIRROR_DB;const count=await db.prepare('SELECT COUNT(*) AS count FROM mirror_cards').first().catch(()=>({count:0}));const state=await db.prepare("SELECT value FROM mirror_sync_state WHERE key='stableSyncV2At' LIMIT 1").first().catch(()=>null);const last=Number(state?.value||0);if(!Number(count?.count||0))return stableSync(env);if(Date.now()-last>SYNC_MS){const now=Date.now();await db.prepare("INSERT INTO mirror_sync_state(key,value,updatedAt) VALUES('lastSheetSync',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updatedAt=excluded.updatedAt").bind(String(now),now).run().catch(()=>{});const task=stableSync(env).catch(error=>console.warn('Stable card sync failed',error));if(ctx?.waitUntil)ctx.waitUntil(task);else void task}return{synced:false,count:Number(count?.count||0)}}
 
-async function bootstrap(request,env,ctx){await prepareCards(env,ctx);const response=await legacy.fetch(request,env,ctx);if(!response.ok)return response;const data=await response.json();if(data?.settings){for(const key of ['drawRewardEnabled','favoriteRewardEnabled','shareCostEnabled','aiCostEnabled','aiEnabled'])delete data.settings[key]}return json(data)}
+async function bootstrap(request,env,ctx){
+  const owner=await ownerFor(request,env);
+  if(owner.error)return owner.error;
+  const db=env.MIRROR_DB;
+  if(!db)return json({error:'mirror_storage_not_ready'},503);
+  // Do not delegate this request to legacy.fetch(): its old sheet synchronizer
+  // can race with stableSync and block the entire card page after a successful deployment.
+  await prepareCards(env,ctx);
+  if(owner.ownerType==='user'&&owner.deviceId){
+    try{await mergeVisitor(db,owner.ownerId,owner.deviceId)}
+    catch(error){console.warn('Mirror guest progress migration deferred',error)}
+  }
+  const [cardsResult,flipsResult,favoritesResult,settings,today]=await Promise.all([
+    db.prepare('SELECT id,quoteText,category,position,active FROM mirror_cards ORDER BY position').all(),
+    db.prepare('SELECT cardId,firstFlippedAt FROM mirror_flips WHERE ownerType=? AND ownerId=? ORDER BY firstFlippedAt DESC').bind(owner.ownerType,owner.ownerId).all(),
+    db.prepare('SELECT cardId,active,firstFavoritedAt,updatedAt FROM mirror_favorites WHERE ownerType=? AND ownerId=?').bind(owner.ownerType,owner.ownerId).all(),
+    readSettings(db),
+    usage(db,owner.ownerType,owner.ownerId)
+  ]);
+  return json({
+    app:{id:'starry-mirror',name:'繁星心鏡'},
+    authenticated:owner.ownerType==='user',
+    identity:owner.identity?{name:owner.identity.name,rank:owner.identity.approvedRank||owner.identity.rank||'',isSuperAdmin:Boolean(owner.identity.isSuperAdmin)}:null,
+    battery:owner.ownerType==='user'?toBattery(owner.identity?.balanceUnits||0):null,
+    cards:cardsResult?.results||[],
+    flips:flipsResult?.results||[],
+    favorites:favoritesResult?.results||[],
+    usage:usagePayload(settings,tierFor(owner.identity),today),
+    settings
+  });
+}
 
 async function flip(request,env){const owner=await ownerFor(request,env);if(owner.error)return owner.error;const input=await request.json().catch(()=>({})),cardId=text(input.cardId),db=env.MIRROR_DB;const card=await db.prepare('SELECT id,active FROM mirror_cards WHERE id=? LIMIT 1').bind(cardId).first();if(!card||!Number(card.active))return json({error:'card_not_available'},404);const existing=await db.prepare('SELECT rewardUnits,batterySettled FROM mirror_flips WHERE ownerType=? AND ownerId=? AND cardId=? LIMIT 1').bind(owner.ownerType,owner.ownerId,cardId).first();const settings=await readSettings(db),tier=tierFor(owner.identity),day=taiwanDay();if(existing){let battery={success:true,deltaUnits:0,balanceUnits:Number(owner.identity?.balanceUnits||0)};if(owner.ownerType==='user'&&Number(existing.rewardUnits||0)&&!Number(existing.batterySettled||0)){battery=await settle(env,owner,Number(existing.rewardUnits),'mirror_draw_reward',cardId,'繁星心鏡首次翻卡獎勵',`mirror:flip:${owner.ownerId}:${cardId}`);if(battery.success)await db.prepare('UPDATE mirror_flips SET batterySettled=1 WHERE ownerType=? AND ownerId=? AND cardId=?').bind(owner.ownerType,owner.ownerId,cardId).run()}const row=await usage(db,owner.ownerType,owner.ownerId,day);return json({success:true,alreadyFlipped:true,batteryDelta:toBattery(battery.deltaUnits||0),battery:owner.ownerType==='user'?toBattery(battery.balanceUnits||0):null,usage:usagePayload(settings,tier,row)})}const row=await usage(db,owner.ownerType,owner.ownerId,day);if(Number(row.drawCount||0)>=drawLimit(settings,tier))return json({error:'daily_draw_limit',usage:usagePayload(settings,tier,row)},429);const reward=owner.ownerType==='user'?toUnits(settings.drawRewardBatteries):0,now=Date.now();await db.batch([db.prepare('INSERT INTO mirror_flips(ownerType,ownerId,cardId,firstFlippedAt,rewardUnits,batterySettled) VALUES(?,?,?,?,?,?)').bind(owner.ownerType,owner.ownerId,cardId,now,reward,reward?0:1),db.prepare('INSERT INTO mirror_daily_usage(ownerType,ownerId,day,drawCount,aiCount,favoriteRewardUnits,updatedAt) VALUES(?,?,?,1,0,0,?) ON CONFLICT(ownerType,ownerId,day) DO UPDATE SET drawCount=drawCount+1,updatedAt=excluded.updatedAt').bind(owner.ownerType,owner.ownerId,day,now)]);let battery={success:true,deltaUnits:0,balanceUnits:Number(owner.identity?.balanceUnits||0)};if(reward){battery=await settle(env,owner,reward,'mirror_draw_reward',cardId,'繁星心鏡首次翻卡獎勵',`mirror:flip:${owner.ownerId}:${cardId}`);if(battery.success)await db.prepare('UPDATE mirror_flips SET batterySettled=1 WHERE ownerType=? AND ownerId=? AND cardId=?').bind(owner.ownerType,owner.ownerId,cardId).run()}const next=await usage(db,owner.ownerType,owner.ownerId,day);return json({success:true,alreadyFlipped:false,batteryDelta:battery.success?toBattery(reward):0,battery:owner.ownerType==='user'?toBattery(battery.balanceUnits||0):null,usage:usagePayload(settings,tier,next)})}
 

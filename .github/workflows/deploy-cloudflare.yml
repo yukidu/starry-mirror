@@ -42,6 +42,8 @@ jobs:
           node --check worker/index.js
           node --check worker/main.js
           node --check worker/v2.js
+          node --check tests/bootstrap.test.mjs
+          node --test tests/bootstrap.test.mjs
           node --check worker/ai-models.mjs
           node --check tests/ai-models.test.mjs
           node --test tests/ai-models.test.mjs
@@ -160,4 +162,26 @@ jobs:
             sleep 5
           done
           echo 'Starry Mirror production verification failed.' >&2
+          exit 1
+
+      - name: Verify real guest cards load from production D1
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            code=$(curl -sS -A 'Mozilla/5.0 StarryMirrorBootstrapCheck/1.0' \\
+              --connect-timeout 5 --max-time 20 -o /tmp/bootstrap.json -w '%{http_code}' \\
+              -H 'Accept: application/json' \\
+              -H 'X-Mirror-Device: starry-deploy-bootstrap-check-000001' \\
+              "https://mirror.starry.phd/api/mirror/bootstrap?verify=${GITHUB_SHA}-${attempt}" || true)
+            if [ "$code" = 200 ] && node -e "const x=JSON.parse(require('fs').readFileSync('/tmp/bootstrap.json','utf8'));if(x.app?.id!=='starry-mirror'||!Array.isArray(x.cards)||x.cards.filter(c=>Number(c.active)===1).length<1||!x.usage?.draws)process.exit(1)"; then
+              echo 'Verified live bootstrap returns active cards and usage.'
+              exit 0
+            fi
+            echo "Attempt ${attempt}: bootstrap HTTP ${code} (awaiting recovery)"
+            sleep 6
+          done
+          echo 'Production guest card bootstrap failed.' >&2
+          head -c 700 /tmp/bootstrap.json || true
           exit 1

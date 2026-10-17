@@ -61,7 +61,15 @@
 
   async function loadBootstrap() {
     if (!window.StarryPlatform?.auth?.getToken?.()) await window.StarryPlatform?.auth?.refreshIdentity?.();
-    state.data = await api('/bootstrap'); state.cards = state.data.cards || []; state.flips = new Set((state.data.flips || []).map(row => row.cardId)); state.favorites = new Set((state.data.favorites || []).filter(row => Number(row.active) === 1).map(row => row.cardId)); updateUiStatus();
+    try { state.data = await api('/bootstrap'); }
+    catch (error) {
+      if (error.status !== 401) throw error;
+      // The Starry ID session can outlive its short-lived Mirror app token.
+      // Reissue that token once before incorrectly displaying an empty card grid.
+      await window.StarryPlatform?.auth?.refreshIdentity?.();
+      state.data = await api('/bootstrap');
+    }
+    state.cards = state.data.cards || []; state.flips = new Set((state.data.flips || []).map(row => row.cardId)); state.favorites = new Set((state.data.favorites || []).filter(row => Number(row.active) === 1).map(row => row.cardId)); updateUiStatus();
   }
   function populateCategories() {
     const options = document.getElementById('dropdownOptions'); if (!options) return; const categories = [...new Set(activeCards().map(card => card.category).filter(Boolean))]; options.innerHTML = '';

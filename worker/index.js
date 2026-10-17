@@ -225,7 +225,7 @@ async function bumpUsage(db, ownerType, ownerId, day, field, amount) {
     .bind(amount, now, ownerType, ownerId, day).run();
 }
 
-async function mergeVisitor(db, userId, device) {
+export async function mergeVisitor(db, userId, device) {
   if (!userId || !device) return;
   const deviceUsage = await db.prepare(`SELECT day,drawCount,aiCount FROM mirror_daily_usage WHERE ownerType='device' AND ownerId=?`).bind(device).all().catch(() => ({ results: [] }));
   for (const row of deviceUsage?.results || []) {

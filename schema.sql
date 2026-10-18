@@ -48,6 +48,18 @@ CREATE TABLE IF NOT EXISTS mirror_daily_usage (
   PRIMARY KEY(ownerType, ownerId, day)
 );
 
+-- Only one in-flight reading per signed-in member per Taiwan calendar day.
+-- Expired locks recover safely after Worker interruption.
+CREATE TABLE IF NOT EXISTS mirror_ai_attempt_locks (
+  ownerId TEXT NOT NULL,
+  day TEXT NOT NULL,
+  attemptId TEXT NOT NULL,
+  expiresAt INTEGER NOT NULL,
+  createdAt INTEGER NOT NULL,
+  PRIMARY KEY(ownerId, day)
+);
+CREATE INDEX IF NOT EXISTS mirror_ai_attempt_locks_expiry ON mirror_ai_attempt_locks(expiresAt);
+
 CREATE TABLE IF NOT EXISTS mirror_ai_readings (
   id TEXT PRIMARY KEY,
   ownerType TEXT NOT NULL CHECK(ownerType IN ('user','device')),

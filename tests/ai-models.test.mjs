@@ -1,13 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AI_MODELS, extractAiText, runMirrorAi } from '../worker/ai-models.mjs';
+import { AI_MODELS, MODEL_CHOICES, DEFAULT_PRIMARY_MODEL, modelFallbackOrder, extractAiText, runMirrorAi } from '../worker/ai-models.mjs';
 
-test('only the three approved Workers AI models are used in order', () => {
+test('five admin-selectable Workers AI models with three bounded defaults', () => {
   assert.deepEqual([...AI_MODELS], [
     '@cf/qwen/qwen3.8-27b',
     '@cf/openai/gpt-oss-120b',
     '@cf/zai-org/glm-4.7-flash',
+    '@cf/qwen/qwen3-30b-a3b-fp8',
+    '@cf/zai-org/glm-5.3-flash',
   ]);
+  assert.equal(DEFAULT_PRIMARY_MODEL,AI_MODELS[0]);
+  assert.equal(MODEL_CHOICES.length,5);
+  assert.deepEqual(modelFallbackOrder(),AI_MODELS.slice(0,3));
 });
 
 test('Qwen success does not call backup models', async () => {
@@ -40,7 +45,7 @@ test('empty responses fall back through GLM, and model recorded is actual succes
     if (model === AI_MODELS[1]) throw new Error('temporarily busy');
     return { result: { choices: [{ message: { content: 'GLM 成功' } }] } };
   } }, []);
-  assert.deepEqual(calls, AI_MODELS);
+  assert.deepEqual(calls, AI_MODELS.slice(0,3));
   assert.equal(result.model, AI_MODELS[2]);
   assert.equal(result.resultText, 'GLM 成功');
 });
@@ -100,4 +105,18 @@ test('an inference that never responds cannot block all other free backup models
 test('all three unresponsive inferences fail within the combined wait budget', async () => {
   const result = await runMirrorAi({ run: () => new Promise(() => {}) }, [], { timeouts: [5, 5, 5] });
   assert.equal(result.error, 'ai_temporarily_unavailable');
+});
+
+
+test('super-admin chosen Qwen3 30B is primary but established backup models remain', async () => {
+  const calls=[];
+  const result=await runMirrorAi({run:async model=>{calls.push(model);if(calls.length===1)throw Error('busy');return {response:'備援成功'};}},[],{primaryModel:AI_MODELS[3]});
+  assert.deepEqual(calls,[AI_MODELS[3],AI_MODELS[0]]);
+  assert.equal(result.model,AI_MODELS[0]);
+});
+
+test('invalid model choice cannot invoke arbitrary paid provider model', async () => {
+  const calls=[];
+  await runMirrorAi({run:async model=>{calls.push(model);return {response:'完成'};}},[],{primaryModel:'some-paid-unapproved-model'});
+  assert.deepEqual(calls,[AI_MODELS[0]]);
 });

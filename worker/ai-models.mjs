@@ -1,10 +1,28 @@
-// Cloudflare Workers AI models available to Workers Free users.
-// This allowlist is server-only: no user input or dashboard setting may add paid frontier models.
+// Allowed Cloudflare Workers AI models. Model charges still depend on account use.
+// The server validates administrator selections against this fixed allowlist.
 export const AI_MODELS = Object.freeze([
   '@cf/qwen/qwen3.8-27b',
   '@cf/openai/gpt-oss-120b',
   '@cf/zai-org/glm-4.7-flash',
+  '@cf/qwen/qwen3-30b-a3b-fp8',
+  '@cf/zai-org/glm-5.3-flash',
 ]);
+
+export const DEFAULT_PRIMARY_MODEL = AI_MODELS[0];
+export const MODEL_CHOICES = Object.freeze([
+  { id: AI_MODELS[0], label: 'Qwen 3.8 27B', advantage: '繁體中文、深入反思與個人化解讀' },
+  { id: AI_MODELS[1], label: 'GPT-OSS 120B', advantage: '複雜脈絡整理與深度推理' },
+  { id: AI_MODELS[2], label: 'GLM 4.7 Flash', advantage: '回覆速度及運算效率' },
+  { id: AI_MODELS[3], label: 'Qwen3 30B A3B', advantage: '輕量化推理、適合高使用量' },
+  { id: AI_MODELS[4], label: 'GLM 5.3 Flash', advantage: '新世代推理能力，需留意用量費用' },
+]);
+
+export function modelFallbackOrder(primary = DEFAULT_PRIMARY_MODEL) {
+  const selected = AI_MODELS.includes(primary) ? primary : DEFAULT_PRIMARY_MODEL;
+  // One chosen primary and two established fallbacks keep mobile latency bounded.
+  return [selected, ...AI_MODELS.slice(0, 3).filter(id => id !== selected)].slice(0, 3);
+}
+
 
 function asText(value) {
   if (typeof value === 'string') return value.trim();
@@ -44,7 +62,7 @@ const timedOut = Symbol('mirror_ai_timeout');
 export async function runMirrorAi(ai, messages, options = {}) {
   if (!ai?.run) return { error: 'ai_binding_unavailable' };
   const timeouts = options.timeouts || MODEL_TIMEOUTS_MS;
-  for (const [index, model] of AI_MODELS.entries()) {
+  for (const [index, model] of modelFallbackOrder(options.primaryModel).entries()) {
     const startedAt = Date.now();
     let timer;
     try {
@@ -54,7 +72,7 @@ export async function runMirrorAi(ai, messages, options = {}) {
         temperature: 0.55,
         // Qwen defaults to high reasoning; low is enough for a reflective
         // reading and leaves more completion budget for actual Chinese text.
-        ...(index === 0 ? { reasoning_effort: 'low' } : {}),
+        ...(model === DEFAULT_PRIMARY_MODEL ? { reasoning_effort: 'low' } : {}),
       };
       const result = await Promise.race([
         Promise.resolve().then(() => ai.run(model, request, { rejectIfBusy: true })),

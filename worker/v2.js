@@ -168,7 +168,7 @@ export default{async fetch(request,env,ctx){const url=new URL(request.url),path=
   if(path==='/api/mirror/share-charge'&&method==='POST')return shareCharge(request,env);
   if(path==='/api/mirror/ai-catalog'&&method==='GET')return json({tasks:[{
     id:'mirror.reading',app:'繁星心鏡',title:'AI 個人化解籤',
-    model:AI_MODELS.map(m=>m.replace(/^@cf\\//,'')).join(' → '),
+    model:AI_MODELS.map(m=>m.startsWith('@cf/')?m.slice(4):m).join(' → '),
     path:'繁星心鏡 → 翻卡 → AI 解籤',url:'https://mirror.starry.phd/'
   }]});
   if(path==='/api/mirror/ai-readings'&&method==='POST')return aiReading(request,env);

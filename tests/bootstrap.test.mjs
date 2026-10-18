@@ -68,3 +68,55 @@ test('signed-in member sees cards and profile with no Starry ID credentials expo
   assert.equal(data.usage.tier,'platinum');
   assert.equal(JSON.stringify(data).includes('aaaaaaaa'),false);
 });
+
+test('visitor cannot obtain AI eligibility or start AI generation', async () => {
+  const env={MIRROR_DB:testDb(),AI:{run:()=>{throw Error('must not execute AI')} }};
+  const guest={'X-Mirror-Device':'stable-guest-device-id-00000001'};
+  for(const [url,method] of [['/api/mirror/ai-access','GET'],['/api/mirror/ai-readings','POST'],['/api/mirror/birthday','POST']]){
+    const response=await mirror.fetch(new Request('https://mirror.starry.phd'+url,{method,headers:guest}),env,{});
+    assert.equal(response.status,401,url);
+  }
+});
+
+test('signed-in member without birthday is blocked by server before AI call',async()=>{
+  const env={
+    MIRROR_DB:testDb(),AI:{run:()=>{throw Error('must not execute AI')}},
+    STARRY_ECOSYSTEM:{fetch:async()=>new Response(JSON.stringify({
+      authenticated:true,identity:{userId:'abc',name:'會員',birthday:'',balanceUnits:0}
+    }),{headers:{'content-type':'application/json'}})}
+  };
+  const response=await mirror.fetch(new Request('https://mirror.starry.phd/api/mirror/ai-readings',{
+    method:'POST',headers:{Authorization:'Bearer '+'a'.repeat(40),'Content-Type':'application/json'},
+    body:JSON.stringify({cardId:'Q000001',direction:'事業'})
+  }),env,{});
+  assert.equal(response.status,409);
+  assert.equal((await response.json()).error,'birthday_required');
+});
+
+test('daily first AI is free and next successful attempt costs 20 batteries',async()=>{
+  let aiCount=0;
+  const db=testDb(),prepare=db.prepare.bind(db);
+  db.prepare=sql=>{
+    const statement=prepare(sql);
+    if(sql.includes('FROM mirror_daily_usage'))statement.first=async()=>({aiCount,drawCount:0});
+    return statement;
+  };
+  const env={
+    MIRROR_DB:db,
+    STARRY_ECOSYSTEM:{fetch:async()=>new Response(JSON.stringify({
+      authenticated:true,identity:{userId:'abc',name:'會員',birthday:'1990-06-15',balanceUnits:300}
+    }),{headers:{'content-type':'application/json'}})}
+  };
+  const request=()=>new Request('https://mirror.starry.phd/api/mirror/ai-access',{headers:{Authorization:'Bearer '+'a'.repeat(40)}});
+  let response=await mirror.fetch(request(),env,{});
+  let data=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(data.costBatteries,0);
+  assert.equal(data.firstFree,true);
+  aiCount=1;
+  response=await mirror.fetch(request(),env,{});
+  data=await response.json();
+  assert.equal(data.costBatteries,20);
+  assert.equal(data.firstFree,false);
+  assert.equal(data.remaining,1);
+});

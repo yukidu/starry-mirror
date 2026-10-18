@@ -282,9 +282,112 @@
   async function renderFavoritesPage(){const body=prepareStandalonePage('❤️ 我的收藏');const cards=activeCards().filter(card=>state.favorites.has(card.id));if(!cards.length){body.innerHTML='<div class="mirror-empty">目前還沒有收藏的金句</div>';return;}body.className='mirror-list';body.innerHTML=cards.map(card=>`<article class="mirror-list-card"><div class="quote">${escapeHtml(card.quoteText)}</div><div class="mirror-meta">${escapeHtml(card.category)} · ${escapeHtml(card.id)}</div><div class="mirror-list-actions"><button data-open="${card.id}">查看／解籤</button><button data-remove="${card.id}">取消收藏</button></div></article>`).join('');body.querySelectorAll('[data-open]').forEach(btn=>btn.onclick=e=>showCardDialog(state.cards.find(c=>c.id===btn.dataset.open)));body.querySelectorAll('[data-remove]').forEach(btn=>btn.onclick=async e=>{const card=state.cards.find(c=>c.id===btn.dataset.remove);await toggleFavorite(card,e,{querySelector:()=>({textContent:''})});state.favorites.delete(card.id);renderFavoritesPage();});}
   async function renderAiHistoryPage(){const body=prepareStandalonePage('🔮 AI解籤紀錄');let data;try{data=await api('/ai-history')}catch{body.innerHTML='<div class="mirror-empty">讀取解籤紀錄失敗</div>';return;}const rows=data.readings||[];if(!rows.length){body.innerHTML='<div class="mirror-empty">目前還沒有 AI 解籤紀錄</div>';return;}body.className='mirror-list';body.innerHTML=rows.map(row=>`<article class="mirror-list-card"><div class="mirror-meta">${escapeHtml(row.direction)} · ${new Date(Number(row.createdAt)).toLocaleString('zh-TW')}</div><div class="quote">${escapeHtml(row.quoteText)}</div><div class="mirror-reading">${escapeHtml(row.resultText)}</div><div class="mirror-list-actions"><button data-share-ai="${row.id}">📤 分享圖片</button></div></article>`).join('');body.querySelectorAll('[data-share-ai]').forEach(btn=>btn.onclick=e=>shareReadingImage(rows.find(r=>r.id===btn.dataset.shareAi),e));}
 
-  const SETTING_LABELS={drawRewardBatteries:'首次翻卡獎勵（顆）',favoriteRewardBatteries:'首次收藏獎勵（顆）',favoriteDailyCapBatteries:'收藏每日最多獎勵（顆）',shareCostBatteries:'分享圖片扣除（顆）',aiCostBatteries:'AI解籤扣除（顆）',drawLimitVisitor:'訪客每日抽卡',drawLimitMember:'一般會員每日抽卡',drawLimit15:'15%以上每日抽卡',drawLimitPlatinum:'白金以上每日抽卡',drawLimitDiamond:'鑽石以上每日抽卡',aiLimitVisitor:'訪客每日AI解籤',aiLimitMember:'一般會員每日AI解籤',aiLimit15:'15%以上每日AI解籤',aiLimitPlatinum:'白金以上每日AI解籤',aiLimitDiamond:'鑽石以上每日AI解籤'};
-  const TOGGLE_LABELS={drawRewardEnabled:'發放抽卡獎勵',favoriteRewardEnabled:'發放收藏獎勵',shareCostEnabled:'啟用分享扣款',aiCostEnabled:'啟用AI解籤扣款',aiEnabled:'啟用AI解籤'};
-  async function renderAdminPage(){const body=prepareStandalonePage('⚙️ 超級管理員');if(!state.data?.identity?.isSuperAdmin){body.innerHTML='<div class="mirror-empty">此頁只開放超級管理員</div>';return;}let result;try{result=await api('/admin/settings')}catch{body.innerHTML='<div class="mirror-empty">管理設定讀取失敗</div>';return;}const settings=result.settings||{};body.innerHTML=`<div class="mirror-admin-note">所有 X 數值都可以在這裡改，不必重新部署。下方開關就是「一鍵暫停獎勵／扣款」：發生異常時可立即單獨關閉某一種規則。</div><div class="mirror-admin-grid">${Object.entries(SETTING_LABELS).map(([key,label])=>`<div class="mirror-setting"><label>${label}</label><input type="number" min="0" step="1" data-setting="${key}" value="${Number(settings[key]??0)}"></div>`).join('')}${Object.entries(TOGGLE_LABELS).map(([key,label])=>`<div class="mirror-setting"><label class="mirror-toggle"><input type="checkbox" data-setting="${key}" ${settings[key]?'checked':''}> ${label}</label></div>`).join('')}</div><div class="mirror-admin-actions"><button id="mirrorSaveSettings">儲存設定</button><button id="mirrorSyncSheet">立即同步 Google 試算表</button></div>`;body.querySelector('#mirrorSaveSettings').onclick=async()=>{const next={};body.querySelectorAll('[data-setting]').forEach(input=>{next[input.dataset.setting]=input.type==='checkbox'?input.checked:Number(input.value)});try{await api('/admin/settings',{method:'PUT',body:JSON.stringify({settings:next})});toast('設定已儲存');await reload();}catch{toast('設定儲存失敗')}};body.querySelector('#mirrorSyncSheet').onclick=async()=>{try{const r=await api('/admin/sync',{method:'POST',body:'{}'});toast(`已同步 ${r.count||0} 張金句`);await reload();}catch{toast('同步失敗')}};}
+
+  const GENERAL_SETTINGS={
+    drawRewardBatteries:'首次翻卡獎勵（顆）',
+    favoriteRewardBatteries:'首次收藏獎勵（顆）',
+    favoriteDailyCapBatteries:'收藏每日最多獎勵（顆）',
+    shareCostBatteries:'分享圖片扣除（顆）',
+    drawLimitVisitor:'訪客每日抽卡',
+    drawLimitMember:'一般會員每日抽卡',
+    drawLimit15:'15%以上每日抽卡',
+    drawLimitPlatinum:'白金以上每日抽卡',
+    drawLimitDiamond:'鑽石以上每日抽卡'
+  };
+  const AI_SETTINGS={
+    aiCostBatteries:'第 2 次起每次解籤扣除電池（顆）',
+    aiLimitMember:'一般會員每日 AI 解籤上限',
+    aiLimit15:'15%以上每日 AI 解籤上限',
+    aiLimitPlatinum:'白金以上每日 AI 解籤上限',
+    aiLimitDiamond:'鑽石以上每日 AI 解籤上限'
+  };
+
+  function renderSettingInputs(labels,settings){
+    return Object.entries(labels).map(([key,label])=>`<div class="mirror-setting"><label for="mirror-setting-${key}">${escapeHtml(label)}</label><input id="mirror-setting-${key}" type="number" min="0" step="1" data-setting="${key}" value="${Number(settings[key]??0)}"></div>`).join('');
+  }
+
+  async function renderAdminPage(){
+    const body=prepareStandalonePage('⚙️ 超級管理員');
+    if(!state.data?.identity?.isSuperAdmin){body.innerHTML='<div class="mirror-empty">此頁只開放超級管理員</div>';return}
+    let result;
+    try{result=await api('/admin/settings')}
+    catch{body.innerHTML='<div class="mirror-empty">管理設定讀取失敗</div>';return}
+    const settings=result.settings||{};
+    const models=result.models||[];
+    body.innerHTML=`
+      <div class="mirror-admin-tabs" role="tablist" aria-label="超級管理員選單">
+        <button type="button" data-tab="general" aria-selected="false">抽卡與獎勵</button>
+        <button type="button" data-tab="ai-reading" aria-selected="false">🔮 AI 解籤設定</button>
+        <button type="button" data-tab="ai-models" aria-selected="false">🤖 AI 模型</button>
+      </div>
+      <section data-section="general">
+        <p class="mirror-admin-note">抽卡和收藏等原有設定仍在這裡，修改後點選儲存。</p>
+        <div class="mirror-admin-grid">${renderSettingInputs(GENERAL_SETTINGS,settings)}</div>
+        <div class="mirror-admin-actions"><button type="button" data-save="general">儲存抽卡設定</button><button type="button" id="mirrorSyncSheet">立即同步 Google 試算表</button></div>
+      </section>
+      <section data-section="ai-reading">
+        <h2>AI 解籤設定 → 次數與電池</h2>
+        <p class="mirror-guard-note">🔒 僅登入 Starry ID 並填寫生日的會員可以解籤。每日第 1 次免費；第 2 次起依下方電池數量收費。解籤失敗不扣電池、不算成功次數。</p>
+        <div class="mirror-admin-grid">${renderSettingInputs(AI_SETTINGS,settings)}</div>
+        <div class="mirror-admin-actions"><button type="button" data-save="ai-reading">儲存解籤與電池設定</button></div>
+      </section>
+      <section data-section="ai-models">
+        <h2>AI 解籤設定 → AI 模型</h2>
+        <p class="mirror-admin-note">點選下方任一列就會儲存為主要 AI 模型；不需要下拉選單。忙碌時依然會切換至備援模型。Workers AI 可能產生費用，使用前請留意用量。</p>
+        <div style="overflow-x:auto"><table class="mirror-admin-models"><thead><tr><th>選擇</th><th>AI 模型</th><th>主要優點</th></tr></thead><tbody>${models.map(model=>`<tr data-model-row="${escapeHtml(model.id)}" aria-selected="${model.id===settings.aiPrimaryModel?'true':'false'}"><td><input type="radio" name="mirror-primary-model" value="${escapeHtml(model.id)}" ${model.id===settings.aiPrimaryModel?'checked':''} aria-label="選擇 ${escapeHtml(model.label)}"></td><td><strong>${escapeHtml(model.label)}</strong>${model.id===settings.aiPrimaryModel?' <small>（目前使用）</small>':''}</td><td>${escapeHtml(model.advantage)}</td></tr>`).join('')}</tbody></table></div>
+        <p class="mirror-model-note">切換只影響未來的新解籤，不會修改舊解籤內容或歷史紀錄。</p>
+      </section>
+    `;
+    const tabs=[...body.querySelectorAll('[data-tab]')];
+    const sections=[...body.querySelectorAll('[data-section]')];
+    function openTab(which){
+      tabs.forEach(tab=>tab.setAttribute('aria-selected',String(tab.dataset.tab===which)));
+      sections.forEach(section=>{section.hidden=section.dataset.section!==which});
+      location.hash=which;
+    }
+    const initial=['general','ai-reading','ai-models'].includes(location.hash.slice(1))?location.hash.slice(1):'ai-reading';
+    tabs.forEach(tab=>tab.onclick=()=>openTab(tab.dataset.tab));
+    openTab(initial);
+    body.querySelectorAll('[data-save]').forEach(button=>button.onclick=async()=>{
+      const section=body.querySelector('[data-section="'+button.dataset.save+'"]'),next={};
+      section.querySelectorAll('input[data-setting]').forEach(input=>next[input.dataset.setting]=Number(input.value));
+      button.disabled=true;
+      try{await api('/admin/settings',{method:'PUT',body:JSON.stringify({settings:next})});toast('設定已儲存並立即生效')}
+      catch{toast('設定儲存失敗，請檢查網路後重試')}
+      finally{button.disabled=false}
+    });
+    body.querySelector('#mirrorSyncSheet').onclick=async()=>{
+      try{const r=await api('/admin/sync',{method:'POST',body:'{}'});toast(`已同步 ${r.count||0} 張金句`)}
+      catch{toast('同步失敗')}
+    };
+    let selected=settings.aiPrimaryModel;
+    body.querySelectorAll('[data-model-row]').forEach(row=>{
+      row.onclick=async()=>{
+        const target=row.dataset.modelRow;
+        if(target===selected)return;
+        const original=selected;
+        row.querySelector('input').checked=true;
+        try{
+          const updated=await api('/admin/settings',{method:'PUT',body:JSON.stringify({settings:{aiPrimaryModel:target}})});
+          selected=updated.settings.aiPrimaryModel;
+          body.querySelectorAll('[data-model-row]').forEach(item=>{
+            const on=item.dataset.modelRow===selected;
+            item.setAttribute('aria-selected',String(on));
+            item.querySelector('input').checked=on;
+            const small=item.querySelector('small');
+            if(small)small.remove();
+            if(on){const mark=document.createElement('small');mark.textContent='（目前使用）';item.querySelector('strong').after(mark)}
+          });
+          toast('AI 主模型切換成功，下次解籤起生效');
+        }catch{
+          const old=body.querySelectorAll('[data-model-row]');
+          old.forEach(item=>item.querySelector('input').checked=item.dataset.modelRow===original);
+          toast('AI 模型切換失敗，原設定已保留');
+        }
+      };
+    });
+  }
+
 
   async function reload(){await loadBootstrap();populateCategories();renderGrid();updateStats();}
   async function boot(){installStyle();document.title='繁星心鏡 Starry Mirror';try{await loadBootstrap();}catch(error){console.error('Mirror bootstrap failed',error);toast('繁星心鏡資料讀取失敗，請稍後重新整理');return;}window.switchCategory=switchCategory;populateCategories();const path=location.pathname.replace(/\/+$/,'')||'/';if(path==='/favorites')return renderFavoritesPage();if(path==='/ai-history')return renderAiHistoryPage();if(path==='/admin')return renderAdminPage();renderGrid();updateStats();}

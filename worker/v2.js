@@ -190,12 +190,12 @@ async function saveBirthday(request,env){
 
 async function lockAiAttempt(db,ownerId,day,attemptId){
   const now=Date.now();
-  const acquired=await db.prepare(`INSERT INTO mirror_ai_attempt_locks(ownerId,day,attemptId,expiresAt,createdAt)
+  const result=await db.prepare(`INSERT INTO mirror_ai_attempt_locks(ownerId,day,attemptId,expiresAt,createdAt)
     VALUES(?,?,?,?,?) ON CONFLICT(ownerId,day) DO UPDATE SET
       attemptId=excluded.attemptId,expiresAt=excluded.expiresAt,createdAt=excluded.createdAt
-    WHERE mirror_ai_attempt_locks.expiresAt < excluded.createdAt
-    RETURNING attemptId`).bind(ownerId,day,attemptId,now+120000,now).first();
-  return acquired?.attemptId===attemptId;
+    WHERE mirror_ai_attempt_locks.expiresAt < excluded.createdAt`)
+    .bind(ownerId,day,attemptId,now+120000,now).run();
+  return Number(result?.meta?.changes||0)===1;
 }
 
 async function aiReading(request,env){

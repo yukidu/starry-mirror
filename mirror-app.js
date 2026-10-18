@@ -195,6 +195,7 @@
   function confirmAiCharge(card,direction,chooser,parent,access){
     const cost=Number(access.costBatteries||0);
     if(cost<=0){void runAi(card,direction,chooser,parent,0);return}
+    if(Number(access.battery||0)<cost){toast('電池不足，目前無法使用 AI 解籤');return}
     const notice=layer(`<button class="mirror-close" aria-label="關閉">✕</button><h2>🔋 扣款前確認</h2><p style="font-size:21px;font-weight:950">本次 AI 解籤需扣 <strong>${cost} 顆電池</strong></p><p>第 1 次免費，從第 2 次開始收費。今日剩餘 ${Number(access.remaining)} 次；目前電池 ${Number(access.battery)} 顆。</p><div class="mirror-choice-actions"><button class="confirm">確認扣款並開始解籤</button><button class="mirror-secondary cancel">取消</button></div>`);
     notice.querySelector('.mirror-close').onclick=()=>closeLayer(notice);
     notice.querySelector('.cancel').onclick=()=>closeLayer(notice);

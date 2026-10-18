@@ -85,10 +85,6 @@
     body.className='mirror-list';body.innerHTML=rows.map(row=>`<article class="mirror-list-card mirror-admin-reading"><div class="mirror-admin-person">👤 ${esc(row.memberName||'會員')} ${row.memberRank?`｜${esc(row.memberRank)}`:''}</div><div class="mirror-meta">${esc(row.direction)} · ${new Date(Number(row.createdAt)).toLocaleString('zh-TW')}</div><div class="quote">${esc(row.quoteText)}</div><div class="mirror-reading">${esc(row.resultText)}</div><div class="mirror-admin-vote">會員評分：${Number(row.rating)===1?'👍 按讚':Number(row.rating)===-1?'👎 倒讚':'尚未評分'} <span>｜本金句全體按讚：${Number(row.quoteLikeTotal||0)}</span></div></article>`).join('');
   }
 
-  function cleanAdminPage(){
-    document.querySelectorAll('#mirrorPageBody input[type="checkbox"][data-setting]').forEach(input=>input.closest('.mirror-setting')?.remove());
-    const note=document.querySelector('#mirrorPageBody .mirror-admin-note');if(note)note.textContent='所有電池增減數量、五種身份每日抽卡與 AI 解籤次數，都可直接在這裡調整；數值設為 0 代表不發放或不扣除。';
-  }
   async function installMenu() {
     const menu=document.getElementById('starryMenu'), history=document.getElementById('starryMirrorAiHistory');if(!menu||!history)return false;
     const label=history.querySelector('span:last-child');if(label)label.textContent='AI解籤 > 我的解籤紀錄';history.classList.add('starry-ai-child');
@@ -99,14 +95,30 @@
     return true;
   }
 
-  const observer=new MutationObserver(()=>{enhanceReadingDialog();fitAllPreviews();if(location.pathname==='/admin')cleanAdminPage();});
+  // Only react when a newly inserted subtree actually contains a quote preview
+  // or an AI reading. The old global callback rewrote the admin description on
+  // every DOM mutation, triggering itself indefinitely and freezing Chrome.
+  function hasRelevantInsertedContent(records) {
+    for (const record of records) {
+      for (const node of record.addedNodes || []) {
+        if (node.nodeType !== 1) continue;
+        if (node.matches?.('.mirror-reading, .mirror-card-preview') ||
+            node.querySelector?.('.mirror-reading, .mirror-card-preview')) return true;
+      }
+    }
+    return false;
+  }
+  const observer=new MutationObserver(records=>{
+    if (!hasRelevantInsertedContent(records)) return;
+    enhanceReadingDialog();
+    fitAllPreviews();
+  });
   observer.observe(document.documentElement,{childList:true,subtree:true});
 
   async function boot(){
     for(let i=0;i<30;i++){if(await installMenu())break;await new Promise(r=>setTimeout(r,80))}
     if(location.pathname.replace(/\/+$/,'')==='/ai-history')setTimeout(()=>void renderHistory(),180);
     if(location.pathname.replace(/\/+$/,'')==='/admin/ai-readings')setTimeout(()=>void renderAdminReadings(),120);
-    if(location.pathname.replace(/\/+$/,'')==='/admin')setTimeout(cleanAdminPage,250);
     fitAllPreviews();
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else void boot();

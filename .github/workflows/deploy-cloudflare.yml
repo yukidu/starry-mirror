@@ -44,6 +44,8 @@ jobs:
           node --check worker/v2.js
           node --check tests/bootstrap.test.mjs
           node --test tests/bootstrap.test.mjs
+          node --check tests/admin-observer.test.mjs
+          node --test tests/admin-observer.test.mjs
           node --check worker/ai-models.mjs
           node --check tests/ai-models.test.mjs
           node --test tests/ai-models.test.mjs

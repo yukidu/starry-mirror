@@ -111,18 +111,107 @@
   function showCardDialog(card) {
     const favorited = state.favorites.has(card.id); const el = layer(`<button class="mirror-close" aria-label="關閉">✕</button><div class="mirror-quote">${escapeHtml(card.quoteText)}</div><div class="mirror-meta" style="text-align:center">${escapeHtml(card.category)} · ${escapeHtml(card.id)}</div><div class="mirror-actions"><button class="fav">${favorited?'💔 取消收藏':'❤️ 收藏'}</button><button class="ai">🔮 AI解籤</button><button class="share">📤 分享圖片</button></div>`);
     el.querySelector('.mirror-close').onclick=()=>closeLayer(el); el.addEventListener('click',e=>{if(e.target===el)closeLayer(el)});
-    el.querySelector('.fav').onclick=event=>toggleFavorite(card,event,el); el.querySelector('.ai').onclick=()=>chooseDirection(card,el); el.querySelector('.share').onclick=event=>shareQuote(card,event);
+    el.querySelector('.fav').onclick=event=>toggleFavorite(card,event,el); el.querySelector('.ai').onclick=()=>void beginAiReading(card,el); el.querySelector('.share').onclick=event=>shareQuote(card,event);
   }
   async function toggleFavorite(card,event,dialog) {
     pointFromEvent(event); const active = !state.favorites.has(card.id);
     try { const result = await api('/favorite',{method:'POST',body:JSON.stringify({cardId:card.id,active})}); if (active) state.favorites.add(card.id); else state.favorites.delete(card.id); if (result.battery !== undefined) setUsage(null,result.battery); deltaPop(result.batteryDelta,event); dialog.querySelector('.fav').textContent = active ? '💔 取消收藏' : '❤️ 收藏'; toast(active?'已加入收藏':'已取消收藏'); }
     catch { toast('收藏操作暫時失敗'); }
   }
-  function chooseDirection(card,parent) {
-    const el = layer(`<button class="mirror-close">✕</button><h2 style="font-size:22px;font-weight:950;margin:2px 0 8px">AI解籤方向</h2><p style="font-weight:750;opacity:.7">請選擇這一句金句要從哪個方向解讀：</p><div class="mirror-direction-grid">${DIRECTIONS.map(d=>`<button data-direction="${d}">${d}</button>`).join('')}</div>`);
-    el.querySelector('.mirror-close').onclick=()=>closeLayer(el); el.querySelectorAll('[data-direction]').forEach(btn=>btn.onclick=()=>runAi(card,btn.dataset.direction,el,parent));
+
+  function showAiGuestGate(){
+    const el=layer('<button class="mirror-close" aria-label="關閉">✕</button><h2>🔒 請先登入 Starry ID</h2><p>訪客不能使用 AI 解籤。登入會員後，還需有出生日期才能解籤。</p><div class="mirror-choice-actions"><button class="login">登入 Starry ID</button><button class="mirror-secondary cancel">關閉</button></div>');
+    el.querySelector('.mirror-close').onclick=()=>closeLayer(el);
+    el.querySelector('.cancel').onclick=()=>closeLayer(el);
+    el.querySelector('.login').onclick=()=>{closeLayer(el);window.StarryPlatform?.auth?.login?.()};
   }
-  async function runAi(card,direction,chooser,parent) {
+
+  function showBirthdayRefusal(){
+    const el=layer('<button class="mirror-close" aria-label="關閉">✕</button><h2 style="text-align:center">出生日期尚未填寫</h2><p style="text-align:center;font-size:19px;font-weight:900">抱歉，需參考「出生日期」才有依據幫您解籤</p><div class="mirror-choice-actions"><button class="go-back">返回填寫</button><button class="mirror-secondary dismiss">關閉</button></div>');
+    el.querySelector('.mirror-close').onclick=()=>closeLayer(el);
+    el.querySelector('.dismiss').onclick=()=>closeLayer(el);
+    return el;
+  }
+
+  async function beginAiReading(card,parent){
+    if(!state.data?.authenticated){showAiGuestGate();return}
+    let access;
+    try{access=await api('/ai-access')}
+    catch(error){if(error.status===401){showAiGuestGate();return}toast('無法確認會員解籤資格，請稍後再試');return}
+    if(!access.hasBirthday){showBirthdayWheel(card,parent);return}
+    if(access.remaining<=0){toast('今天的 AI 解籤次數已用完');return}
+    chooseDirection(card,parent,access);
+  }
+
+  function showBirthdayWheel(card,parent){
+    const el=layer('<button class="mirror-close" aria-label="關閉">✕</button><h2>🎂 請選擇出生日期</h2><p>AI 解籤需依出生日期計算生命靈數。只需填寫一次，儲存在你的 Starry ID 中央會員資料。</p><div class="mirror-date-wheel"><label>年<select size="5" aria-label="出生年" data-unit="year"></select></label><label>月<select size="5" aria-label="出生月" data-unit="month"></select></label><label>日<select size="5" aria-label="出生日" data-unit="day"></select></label></div><div class="mirror-choice-actions"><button class="save-birthday">儲存並繼續解籤</button><button class="mirror-secondary skip-birthday">暫不填寫</button></div>');
+    const year=el.querySelector('[data-unit="year"]'),month=el.querySelector('[data-unit="month"]'),day=el.querySelector('[data-unit="day"]');
+    const today=new Date(),maxYear=today.getFullYear(),chosenYear=Math.max(1900,maxYear-30);
+    function fill(select,values,selected){
+      select.replaceChildren();
+      for(const value of values){const option=document.createElement('option');option.value=String(value);option.textContent=String(value).padStart(select===year?4:2,'0');select.append(option)}
+      select.value=String(selected);
+    }
+    fill(year,Array.from({length:maxYear-1899},(_,i)=>maxYear-i),chosenYear);
+    fill(month,Array.from({length:12},(_,i)=>i+1),1);
+    function days(){
+      const previous=Number(day.value)||1;
+      const count=new Date(Number(year.value),Number(month.value),0).getDate();
+      fill(day,Array.from({length:count},(_,i)=>i+1),Math.min(previous,count));
+    }
+    fill(day,Array.from({length:31},(_,i)=>i+1),1);
+    year.addEventListener('change',days);month.addEventListener('change',days);
+    function skip(){
+      closeLayer(el);
+      const no=showBirthdayRefusal();
+      no.querySelector('.go-back').onclick=()=>{closeLayer(no);showBirthdayWheel(card,parent)};
+    }
+    el.querySelector('.mirror-close').onclick=skip;
+    el.querySelector('.skip-birthday').onclick=skip;
+    el.querySelector('.save-birthday').onclick=async()=>{
+      const y=Number(year.value),m=Number(month.value),d=Number(day.value);
+      const date=new Date(y,m-1,d);
+      if(date.getFullYear()!==y||date.getMonth()!==m-1||date.getDate()!==d||date.getTime()>Date.now()){toast('請選擇正確的出生日期');return}
+      const formatted=[String(y).padStart(4,'0'),String(m).padStart(2,'0'),String(d).padStart(2,'0')].join('-');
+      const button=el.querySelector('.save-birthday');button.disabled=true;button.textContent='正在儲存…';
+      try{
+        await api('/birthday',{method:'POST',body:JSON.stringify({birthday:formatted})});
+        closeLayer(el);
+        toast('出生日期已安全儲存到 Starry ID');
+        const access=await api('/ai-access');
+        if(access.hasBirthday&&access.remaining>0)chooseDirection(card,parent,access);
+        else toast('生日已儲存，請重新點選 AI 解籤');
+      }catch(error){toast(error?.data?.error||'生日儲存失敗，請稍後重試')}
+      finally{button.disabled=false;button.textContent='儲存並繼續解籤'}
+    };
+  }
+
+  function chooseDirection(card,parent,access) {
+    const el = layer(`<button class="mirror-close">✕</button><h2 style="font-size:22px;font-weight:950;margin:2px 0 8px">AI解籤方向</h2><p style="font-weight:750;opacity:.7">請選擇這一句金句要從哪個方向解讀：</p><div class="mirror-direction-grid">${DIRECTIONS.map(d=>`<button data-direction="${d}">${d}</button>`).join('')}</div>`);
+    el.querySelector('.mirror-close').onclick=()=>closeLayer(el);
+    el.querySelectorAll('[data-direction]').forEach(btn=>btn.onclick=()=>confirmAiCharge(card,btn.dataset.direction,el,parent,access));
+  }
+
+  function confirmAiCharge(card,direction,chooser,parent,access){
+    const cost=Number(access.costBatteries||0);
+    if(cost<=0){void runAi(card,direction,chooser,parent,0);return}
+    const notice=layer(`<button class="mirror-close" aria-label="關閉">✕</button><h2>🔋 扣款前確認</h2><p style="font-size:21px;font-weight:950">本次 AI 解籤需扣 <strong>${cost} 顆電池</strong></p><p>第 1 次免費，從第 2 次開始收費。今日剩餘 ${Number(access.remaining)} 次；目前電池 ${Number(access.battery)} 顆。</p><div class="mirror-choice-actions"><button class="confirm">確認扣款並開始解籤</button><button class="mirror-secondary cancel">取消</button></div>`);
+    notice.querySelector('.mirror-close').onclick=()=>closeLayer(notice);
+    notice.querySelector('.cancel').onclick=()=>closeLayer(notice);
+    notice.querySelector('.confirm').onclick=()=>{closeLayer(notice);void runAi(card,direction,chooser,parent,cost)};
+  }
+
+  function showAiSuccessNotice(result){
+    const remaining=Number(result?.usage?.ai?.remaining||0);
+    const nextCost=Number(result.costBatteriesNext||0);
+    const cost=Number(result.chargedBatteries||0);
+    const el=layer(`<button class="mirror-close" aria-label="關閉" style="width:54px;height:54px;font-size:30px">✕</button><div class="mirror-big-notice"><h2>🔮 今日剩餘解籤次數</h2><div class="mirror-big-number">${remaining} 次</div><div class="mirror-big-fee">第 1 次免費<br>往後每次 -${nextCost} 顆電池 🔋</div><p>本次 ${cost===0?'免費解籤':`已扣 ${cost} 顆電池`}</p><p style="font-size:14px;opacity:.7">點任意處閱讀解籤結果</p></div>`);
+    let opened=false;
+    const open=()=>{if(opened)return;opened=true;closeLayer(el);showReading(result.reading)};
+    el.addEventListener('click',open);
+    el.querySelector('.mirror-close').onclick=open;
+  }
+  async function runAi(card,direction,chooser,parent,confirmedCostBatteries=0) {
     const controller = new AbortController();
     let timedOut = false, canceled = false;
     const dialog = chooser.querySelector('.mirror-dialog');
@@ -140,14 +229,14 @@
     try {
       const result = await api('/ai-readings', {
         method:'POST',
-        body:JSON.stringify({cardId:card.id,direction}),
+        body:JSON.stringify({cardId:card.id,direction,confirmedCostBatteries}),
         signal:controller.signal
       });
       if (canceled || timedOut) return;
       closeLayer(chooser);
       if (result.battery !== undefined) setUsage(result.usage,result.battery);
       deltaPop(result.batteryDelta);
-      showReading(result.reading);
+      showAiSuccessNotice(result);
     } catch(error) {
       if (canceled) return;
       closeLayer(chooser);
@@ -158,6 +247,12 @@
       } else if (error.status === 429) {
         if (error.data?.usage) setUsage(error.data.usage);
         toast('今天的 AI 解籤次數已用完');
+      } else if (error.status === 409 && error.data?.error === 'ai_cost_confirmation_required') {
+        toast('解籤費用或次數剛有變更，請重新點選 AI 解籤確認');
+      } else if (error.status === 409 && error.data?.error === 'ai_reading_in_progress') {
+        toast('已有一份解籤正在處理，請勿重複點擊');
+      } else if (error.status === 409 && error.data?.error === 'birthday_required') {
+        toast('請先填寫出生日期才能使用 AI 解籤');
       } else if (error.status === 402) {
         toast('電池不足，無法使用 AI 解籤');
       } else {

@@ -1,6 +1,6 @@
 import legacy from './main.js';
 import { mergeVisitor } from './index.js';
-import { runMirrorAi, AI_MODELS, MODEL_CHOICES, DEFAULT_PRIMARY_MODEL } from './ai-models.mjs';
+import { runMirrorAi, AI_MODELS, MODEL_CHOICES, DEFAULT_PRIMARY_MODEL, modelFallbackOrder } from './ai-models.mjs';
 
 const SCALE = 10;
 const SYNC_MS = 10 * 60 * 1000;
@@ -295,11 +295,16 @@ export default{async fetch(request,env,ctx){const url=new URL(request.url),path=
   if(path==='/api/mirror/favorite'&&method==='POST')return favorite(request,env);
   if(path==='/api/mirror/share-preflight'&&method==='GET')return sharePreflight(request,env);
   if(path==='/api/mirror/share-charge'&&method==='POST')return shareCharge(request,env);
-  if(path==='/api/mirror/ai-catalog'&&method==='GET')return json({tasks:[{
-    id:'mirror.reading',app:'繁星心鏡',title:'AI 個人化解籤',
-    model:AI_MODELS.map(m=>m.startsWith('@cf/')?m.slice(4):m).join(' → '),
-    path:'繁星心鏡 → 翻卡 → AI 解籤',url:'https://mirror.starry.phd/'
-  }]});
+  if(path==='/api/mirror/ai-catalog'&&method==='GET'){
+    const settings=await readSettings(env.MIRROR_DB);
+    const models=modelFallbackOrder(settings.aiPrimaryModel).map(id=>MODEL_CHOICES.find(m=>m.id===id)?.label||id);
+    return json({tasks:[{
+      id:'mirror.reading',app:'繁星心鏡',title:'AI 個人化解籤',
+      model:models.join(' → '),
+      path:'繁星心鏡 → 超級管理員 → AI 模型',
+      url:'https://mirror.starry.phd/admin#ai-models'
+    }]});
+  }
   if(path==='/api/mirror/ai-access'&&method==='GET')return aiAccess(request,env);
   if(path==='/api/mirror/birthday'&&method==='POST')return saveBirthday(request,env);
   if(path==='/api/mirror/ai-readings'&&method==='POST')return aiReading(request,env);
